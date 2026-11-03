@@ -424,6 +424,7 @@ button:focus-visible {
 }
 
 .task-item {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -431,7 +432,54 @@ button:focus-visible {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+}
+
+/* 拖拽手柄。只有手柄带 draggable，避免点标题绑任务时误触发拖动 */
+.task-drag {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  padding: 0 2px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1.1;
+  cursor: grab;
+  user-select: none;
+}
+
+.task-drag:hover {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.task-drag:active {
+  cursor: grabbing;
+}
+
+/* 拖动中的源卡片淡出，表示它已「离开」原位 */
+.task-item.dragging {
+  opacity: 0.4;
+}
+
+/* 落点指示线：画在卡片上方或下方的间隙里 */
+.task-item[data-drop='before']::before,
+.task-item[data-drop='after']::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.task-item[data-drop='before']::before {
+  top: -5px;
+}
+
+.task-item[data-drop='after']::after {
+  bottom: -5px;
 }
 
 .task-item[data-active='true'] {
