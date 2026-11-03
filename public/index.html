@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<!--
+  今日看板。
+
+  这个文件只负责「骨架 + 挂载点」：所有会变的内容（任务列表、计时器读数、
+  汇总数字、时间轴）都由 public/js/board.js 和 timer.js 在运行时填充，
+  HTML 里那些文字只是首屏占位。
+
+  页面之间共享的只有 <header data-nav> 这一处约定 —— nav.js 会找到这个
+  空元素并把导航栏渲染进去，所以四个页面里它都是空的。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FocusFlow</title>
+  <!-- 空 favicon：不写这行浏览器会去请求 /favicon.ico，控制台多一条 404 -->
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <!-- 导航栏的挂载点。内容由 public/js/nav.js 填充，此处必须留空。 -->
+  <header data-nav></header>
+
+  <main>
+    <h1 class="page-title">今日看板</h1>
+    <!-- 真实日期由下方脚本填。写「—」而不是写死某一天，避免脚本挂了之后
+         页面上留着一个看着像真的、实际是过期的日期。 -->
+    <p class="page-subtitle" id="today-label">—</p>
+
+    <div class="board">
+      <!-- 左列：任务清单 -->
+      <section class="card">
+        <h2 class="card-title">任务清单</h2>
+
+        <!-- 这个 form 不走浏览器默认提交（submit 事件里 preventDefault），
+             form 元素只是因为「回车提交」和「required 校验」免费。 -->
+        <form class="task-form" id="task-form">
+          <!-- maxlength=200 与服务端 validate.ts 的上限保持一致，
+                 在前端先挡一道，省一次往返。 -->
+          <input type="text" name="title" placeholder="要做什么？" maxlength="200"
+                 autocomplete="off" aria-label="任务标题" />
+          <!-- 预估番茄数，不是分钟数。用 style 内联宽度是因为它在这行里
+                 是个例外——其余输入框都该占满。 -->
+          <input type="number" name="estimate" value="1" min="1" max="99"
+                 title="预估番茄数" aria-label="预估番茄数" style="width: 68px" />
+          <button class="primary" type="submit">添加</button>
+        </form>
+
+        <!-- 列表项由 board.js 渲染。这里的「加载中…」是首屏占位，
+             请求回来后整个 ul 会被替换掉。 -->
+        <ul class="task-list" id="task-list">
+          <li class="empty">加载中…</li>
+        </ul>
+      </section>
+
+      <!-- 右列：计时器 + 汇总 + 时间轴。
+           外面包一层 div 是为了配合 .board 的两列 grid：这一列里要叠三个
+           .card，而 .card 的 margin 规则依赖同一个父元素。 -->
+      <div>
+        <!--
+          计时器。
+
+          注意这里所有的初始值（「25:00」「专注」「开始」）都只是占位 ——
+          真实值在 initTimer() 里用服务端的设置覆盖。写死 25 分钟是安全的，
+          因为它恰好是默认值，不会造成首屏跳变。
+        -->
+        <section class="card timer-card">
+          <span class="timer-mode" id="timer-mode" data-mode="focus">专注</span>
+          <!-- data-mode 同时驱动颜色（见 app.css 的 .timer-clock[data-mode]），
+               所以 JS 切换模式时必须同步改这个属性，不能只改文字。 -->
+          <div class="timer-clock" id="timer-clock" data-mode="focus">25:00</div>
+          <div class="timer-progress"><i id="timer-progress"></i></div>
+          <div class="timer-task" id="timer-task">未绑定任务</div>
+
+          <div class="timer-actions">
+            <!-- btn-toggle 的文字在「开始 / 暂停 / 继续」之间切换，
+                 所以它不需要初始态之外的任何东西。 -->
+            <button class="primary" id="btn-toggle" type="button">开始</button>
+            <button id="btn-reset" type="button">重置</button>
+            <button class="ghost" id="btn-skip" type="button">跳过</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">今日汇总</h2>
+          <div class="summary-grid" id="summary"></div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">今日时间轴</h2>
+          <div class="timeline" id="timeline"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!--
+    内联 module script：这是个无打包器项目，浏览器直接解析原生 ES Module。
+
+    先 import nav.js 再 import board.js —— 顺序在这里无所谓（两个模块没有
+    依赖关系），但 nav.js 是纯副作用导入（它自己会渲染导航栏并请求
+    /auth/me），所以它没有导出任何东西。
+
+    initBoard() 里那一长串 Promise.all（任务 + 时段 + 汇总）不在这个文件的
+    职责范围内；这里只兜住「初始化整个失败」的情况，把错误写到副标题上，
+    免得用户对着一个永远显示「加载中…」的页面猜发生了什么。
+  -->
+  <script type="module">
+    import '/js/nav.js';
+    import { initBoard } from '/js/board.js';
+    import { todayKey } from '/js/util.js';
+
+    document.querySelector('#today-label').textContent = todayKey();
+
+    initBoard().catch((error) => {
+      console.error(error);
+      document.querySelector('#today-label').textContent = `初始化失败：${error.message}`;
+    });
+  </script>
+</body>
+</html>

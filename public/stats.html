@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<!--
+  统计页。
+
+  三个图表容器都是空 div —— ECharts 需要拿到一个**有尺寸**的真实元素才能
+  init，所以尺寸由 app.css 的 .chart / .chart.tall 给定（300px / 360px），
+  而不是靠内容撑开。这是 ECharts 最常见的坑：容器高度为 0 时
+  图表不报错，就是一片空白。
+
+  图表的 option 由 public/js/charts.js 构造（纯函数），initStats() 负责
+  取数据、挂载和重绘。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>统计 — FocusFlow</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/css/app.css" />
+  <!--
+    ECharts 走 CDN，所以它必须先于下面的 module script 加载完 ——
+    普通 <script>（非 module）是同步阻塞的，正好保证了这个顺序。
+    离线环境可换成本地 public/vendor/echarts.min.js（README 有说明）。
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+  <header data-nav></header>
+
+  <main>
+    <!-- 标题和范围选择器同一行：用内联 flex 是因为它只在这一个页面出现，
+         不值得为它加一条只有一处使用的样式规则。 -->
+    <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+      <div>
+        <h1 class="page-title">统计</h1>
+        <p class="page-subtitle">用真实的专注数据回顾你的时间去哪儿了</p>
+      </div>
+
+      <!--
+        role=group + aria-pressed 而不是 radio：这是一组「当前选中哪个」的
+        按钮，语义上更接近工具栏，而且用 aria-pressed 就不需要管
+        name 分组和键盘方向键那套 radio 的规矩。
+
+        data-days 是唯一的接口 —— stats.js 直接读它去请求接口。
+      -->
+      <div class="range-picker" id="range-picker" role="group" aria-label="时间范围">
+        <button type="button" data-days="7" aria-pressed="false">7 天</button>
+        <button type="button" data-days="30" aria-pressed="true">30 天</button>
+        <button type="button" data-days="90" aria-pressed="false">90 天</button>
+      </div>
+    </div>
+
+    <div class="charts">
+      <section class="card">
+        <h2 class="card-title">每日专注时长</h2>
+        <div class="chart" id="chart-daily"></div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">专注时段分布（星期 × 小时）</h2>
+        <!-- tall 只是把高度从 300px 加到 360px：热力图是 7 行 × 24 列，
+             矮了之后格子会被压扁到看不清。 -->
+        <div class="chart tall" id="chart-heatmap"></div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">任务完成率</h2>
+        <div class="chart" id="chart-completion"></div>
+        <!-- 完成率的饼图在「一个任务都没有」时没什么可画的，
+             这时用这段文字代替图表，比画一个空饼图清楚。 -->
+        <p class="empty" id="completion-text"></p>
+      </section>
+    </div>
+  </main>
+
+  <script type="module">
+    import '/js/nav.js';
+    import { initStats } from '/js/stats.js';
+    import { reportError } from '/js/ui.js';
+
+    // reportError 会把错误弹成 toast；登录态失效时它会静默
+    // （那时 api.js 已经在跳登录页了，再弹提示只会闪一下反而添乱）。
+    initStats().catch(reportError);
+  </script>
+</body>
+</html>

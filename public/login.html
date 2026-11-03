@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<!--
+  登录 / 注册页。
+
+  两种模式（登录、注册）共用同一个 .auth-card，用底部的 tab 切换 ——
+  切换时不换 URL，只是显隐两个 <form>（见 public/js/auth.js 的 setMode）。
+  这么做是因为两者的字段几乎一样，拆成两个页面反而要处理「用户点错了要
+  怎么跳回来」这种边角问题。
+
+  与另外三个页面的最大区别：**这里没有 <header data-nav>**。原因见下面 body 处的注释。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登录 — FocusFlow</title>
+  <!-- 空 favicon，避免浏览器去请求 /favicon.ico 时在控制台留下 404 -->
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <!-- 刻意不放 <header data-nav>：nav.js 会请求 /auth/me，
+       未登录时那次 401 会把本页直接再跳一次，和这里的逻辑打架。 -->
+  <!-- .auth-page 用 min-height: 100dvh + flex 居中，把卡片垂直居中于视口。
+       用 dvh 而不是 vh 是为了在移动端浏览器地址栏收放时不会溢出。 -->
+  <main class="auth-page">
+    <section class="card auth-card">
+      <div class="auth-brand">
+        <!-- 品牌圆点纯装饰，aria-hidden 让读屏软件跳过它 -->
+        <span class="brand-dot" aria-hidden="true"></span>
+        FocusFlow
+      </div>
+      <p class="auth-subtitle">登录后你的任务和专注记录会保存在账号下</p>
+
+      <!--
+        role="tablist" + role="tab" 是「标签页」的 ARIA 语义，但这里**没有**
+        用 role="tabpanel" 给两个表单 —— 严格来说 ARIA 的 tab 模式要求这么做，
+        不过那需要成对的 id/aria-controls 与完整的键盘方向键支持。
+        这里取的是「语义近似 + 不过度承诺」：视觉和读屏都能听出「一组选项卡」，
+        但键盘路径就是普通的 Tab 键。要换成完整实现的话，记得两个 form 也补上
+        role="tabpanel" 与 aria-labelledby。
+      -->
+      <div class="auth-tabs" role="tablist">
+        <button type="button" role="tab" data-auth-tab="login" aria-selected="true">登录</button>
+        <button type="button" role="tab" data-auth-tab="register" aria-selected="false">注册</button>
+      </div>
+
+      <!--
+        注意 form 上的 novalidate：浏览器自带的校验气泡文案是英文的、样式
+        也没法改，而且注册与登录的规则不同（登录只判非空，注册才判长度与
+        字符集），交给 auth.js 统一处理更好。
+        两个表单的 data-auth-form 值（login / register）就是 JS 里遍历表单、
+        决定提交到哪个接口的依据。
+      -->
+      <form class="auth-form" id="login-form" data-auth-form="login" novalidate>
+        <!-- 行内错误提示。初始带 hidden，JS 出错时移除该属性并写入文案。
+             注意 app.css 里必须配套写 .form-error[hidden] { display: none }，
+             否则 .form-error 的 padding/background 会让它显出一个空色块。 -->
+        <p class="form-error" data-form-error hidden></p>
+
+        <div class="field">
+          <label for="login-username">用户名</label>
+          <!-- 三个属性的用意：
+               autocomplete=username 让密码管理器认出这是账号名；
+               autocapitalize=none + spellcheck=false 防止移动端把首字母
+               自动大写、或给用户名画红波浪线（用户名是小写 ASCII 白名单）。 -->
+          <input
+            type="text"
+            id="login-username"
+            name="username"
+            autocomplete="username"
+            maxlength="32"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+          />
+        </div>
+
+        <div class="field">
+          <label for="login-password">密码</label>
+          <!-- current-password 与注册表单的 new-password 是**不同**的值：
+               前者触发「填入已保存的密码」，后者触发「生成一个强密码」。
+               用错会让浏览器在登录页提示生成新密码。
+               maxlength=72 与服务端上限一致（scrypt 的输入无所谓，但保持一致
+               可以让「前端能过的后端一定也过」）。
+               登录表单刻意不写 minlength=8：老密码可能比现行规则短，
+               在这里拦住会导致合法用户登不进来。 -->
+          <input
+            type="password"
+            id="login-password"
+            name="password"
+            autocomplete="current-password"
+            maxlength="72"
+            required
+          />
+        </div>
+
+        <button class="primary" type="submit">登录</button>
+      </form>
+
+      <!-- 注册表单初始 hidden。同样有 novalidate —— 规则由 auth.js 显式给出，
+           这样错误信息能落到上面那个 .form-error 里，和其它错误同一处显示。 -->
+      <form class="auth-form" id="register-form" data-auth-form="register" novalidate hidden>
+        <p class="form-error" data-form-error hidden></p>
+
+        <div class="field">
+          <label for="register-username">用户名</label>
+          <input
+            type="text"
+            id="register-username"
+            name="username"
+            autocomplete="username"
+            maxlength="32"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+          />
+          <!-- 这行 hint 与 auth.js 的 USERNAME_RE = /^[a-z0-9_]{3,32}$/ 是同一份
+               规则的两种呈现。改规则时两边都要动，否则会出现「前端说可以、
+               后端说不行」的错位。 -->
+          <span class="hint">3–32 位，只能用字母、数字和下划线</span>
+        </div>
+
+        <div class="field">
+          <label for="register-password">密码</label>
+          <!-- new-password 让浏览器提示生成强密码；minlength=8 与
+               auth.js 的 PASSWORD_MIN_LENGTH 一致。 -->
+          <input
+            type="password"
+            id="register-password"
+            name="password"
+            autocomplete="new-password"
+            maxlength="72"
+            minlength="8"
+            required
+          />
+          <!-- 「首尾空格也算密码的一部分」这句必须留着：
+               服务端刻意**不** trim 密码（见 src/lib/validate.ts 的
+               requirePassword），用户如果以为空格会被吃掉，之后在别处
+               输入不带空格的密码就会登录失败，且完全看不出原因。 -->
+          <span class="hint">至少 8 位。首尾的空格也算密码的一部分</span>
+        </div>
+
+        <button class="primary" type="submit">注册并登录</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- 整页逻辑都在 auth.js 里。这里不用内联 module script 是因为
+       登录页没有别的一次性初始化代码（不像 index.html 要填日期）。 -->
+  <script type="module" src="/js/auth.js"></script>
+</body>
+</html>

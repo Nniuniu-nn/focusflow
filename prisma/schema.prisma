@@ -1,0 +1,169 @@
+// FocusFlow 数据模型
+//
+// 核心形状：User 是唯一的聚合根，Task / Session / Setting 全部通过 userId
+// 挂在它下面，四个模型就是整个库的全部。数据隔离（谁的数据谁能看）靠查询
+// 里显式带 userId，外键只保证「这条记录存在」，不保证「它属于你」——因此
+// 改/删一律用 updateMany / deleteMany，userId 不匹配时自然影响 0 行。
+//
+// 约定：
+//   1. 时间戳以 UTC 存储；「某天的专注」「几点到几点」属于本地时区问题，
+//      由 src/lib/stats.ts 的纯函数按显式时区偏移分桶，不塞进 SQL。
+//   2. 账号制：用户名 + 密码登录。密码用 node:crypto 的 scrypt 哈希
+//      （见 src/lib/password.ts），会话用 JWT 存在 httpOnly Cookie 里
+//      （见 src/lib/jwt.ts、src/lib/cookie.ts）。id 由服务端生成。
+//   3. `order` 是 SQL 保留字 —— Prisma 字段名保留 order（与产品需求一致），
+//      物理列名用 @map("sort_order") 规避。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ── 用户 ────────────────────────────────────────────────────
+model User {
+  // 账号制，id 由服务端生成（不再是客户端自报的匿名 UUID）。
+  // @default(uuid()) 是 Prisma 应用层默认值：INSERT 前由客户端库填好，
+  // 不产生任何 DDL —— 迁移文件里看不到它，列上也不会有 DEFAULT。
+  // VarChar(64) 容得下 36 字符的 UUID。
+  id String @id @default(uuid()) @db.VarChar(64)
+
+  // 用户名一律以「NFKC 归一化 + 去空白 + 转小写」后的形式存储，
+  // 见 src/lib/validate.ts 的 requireUsername。
+  // 不依赖 MySQL 的 *_ci 排序规则来实现大小写不敏感 —— 那是隐式且不可移植的。
+  // @unique 只作最后兜底：万一哪天归一化被绕过，唯一索引能挡住重复账号。
+  username String @unique @db.VarChar(32)
+
+  // 格式：scrypt$N$r$p$salt$hash（自描述，便于将来调参后仍能验证旧哈希）
+  // 成本参数跟着哈希一起存，所以调高 N 之后旧用户的哈希依旧能按它自带的
+  // 参数验证通过，不需要强制全员重设密码。实测约 135 字符，255 有充分余量。
+  passwordHash String @db.VarChar(255)
+
+  createdAt DateTime @default(now())
+  // @updatedAt 由 Prisma 在每次 update 时自动写入，应用层不必手维护
+  updatedAt DateTime @updatedAt
+
+  // 三个从属集合都随用户一起删除（见各自 model 上的 onDelete）
+  tasks    Task[]
+  sessions Session[]
+  setting  Setting?
+}
+
+// ── 任务状态 ────────────────────────────────────────────────
+// MySQL 原生 enum：取值在库层面就受限，Prisma 端还会生成联合类型，
+// 比裸字符串多一层编译期保护。
+enum TaskStatus {
+  todo
+  doing
+  done
+}
+
+// ── 时段类型 ────────────────────────────────────────────────
+// 专注与两种休息共用一张 Session 表：统计口径同源，时间轴也按同一条
+// 序列绘制，靠这个枚举区分。只有 focus 才会影响番茄计数。
+enum SessionType {
+  focus
+  short_break
+  long_break
+}
+
+// ── 任务 ────────────────────────────────────────────────────
+model Task {
+  id     String  @id @default(uuid()) @db.VarChar(64)
+  userId String  @db.VarChar(64)
+  // 删用户会级联删掉他名下所有任务；但任务本身被删时，挂在它上面的
+  // Session 只会解绑（Session.taskId 是 SetNull）而不会消失 —— 专注历史要留。
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title String  @db.VarChar(200)
+  note  String? @db.Text
+
+  // 任务归属的「某一天」，只存日期部分（@db.Date），不需要时刻精度。
+  // 传进来的是 'YYYY-MM-DD'，由 parseDateOnly 按 UTC 午夜解析，
+  // 这样本地时区不会把任务挪到隔壁那天。
+  date DateTime @db.Date
+
+  // 预估是用户填的计划值；completed 是实际记账值，只由「completed 的
+  // focus 段且挂了本任务」在同一个事务里 +1（见 Session 的写入路径），
+  // 因此重复提交或跨段都不会多记。
+  estimatedPomodoros Int        @default(1)
+  completedPomodoros Int        @default(0)
+  // 用户可见的三态，默认 todo
+  status             TaskStatus @default(todo)
+
+  // order 是 SQL 保留字，物理列映射为 sort_order
+  order Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions Session[]
+
+  // 今日看板主查询：按用户 + 日期取列表，再按 order 排序
+  // 顺序 (userId, date, order) 让「筛完日期就能顺势排序」，无需额外排序步骤
+  @@index([userId, date, order])
+  // 统计页按状态过滤
+  @@index([userId, status, date])
+}
+
+// ── 专注 / 休息时段记录 ─────────────────────────────────────
+model Session {
+  // id 是服务端主键；下面另有客户端自报的 clientId 作为幂等键 —— 两者不是一回事
+  id     String @id @default(uuid()) @db.VarChar(64)
+  userId String @db.VarChar(64)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 可为空：一段时间专注可以不挂任何任务（比如临时查资料）。
+  // 任务被删时置空而非删记录，免得历史专注统计凭空少一截。
+  taskId String? @db.VarChar(64)
+  task   Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  // 幂等键：前端在「专注段开始」时生成，POST 重放不会重复写。
+  // 用复合唯一而非全局唯一 —— 否则跨用户 clientId 碰撞会串数据。
+  clientId String @db.VarChar(64)
+
+  // 毫秒精度（小数 3 位）：25 分钟段的边界可能落在毫秒上，
+  // 但秒级也完全够用，用 DateTime(3) 是留一点余量又不浪费空间。
+  startAt DateTime @db.DateTime(3)
+  endAt   DateTime @db.DateTime(3)
+  // 实际时长，单位：秒（专注段的 endAt - startAt 应等于它）
+  duration  Int
+  type      SessionType @default(focus)
+  // 是否走完全程：false 表示中途放弃/跳过，统计时通常只计 true 的专注
+  completed Boolean     @default(true)
+
+  createdAt DateTime @default(now())
+
+  // 幂等：同一用户内 clientId 唯一。作用域限定在单个用户，
+  // 不同用户各自生成的 UUID 即便撞了也互不影响。
+  @@unique([userId, clientId])
+  // 今日时间轴 & 30 天统计：按用户 + 起始时间范围扫描
+  @@index([userId, startAt])
+  // 按类型过滤的统计
+  @@index([userId, type, startAt])
+  // 支撑「这个任务身上累计了多少段专注」的查询
+  @@index([taskId])
+}
+
+// ── 计时偏好（每个用户一行） ─────────────────────────────────
+// 与 User 一对一，主键直接复用 userId、不另设独立 id —— 一行对一行时，
+// 再开一个自增/uuid 主键纯属多余，还会多一个「谁是谁」的外键要维护。
+// 建用户时用嵌套写 setting: { create: {} } 带出下面这套默认值。
+model Setting {
+  userId String @id @db.VarChar(64)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 经典番茄工作法的默认值：专注 25 分钟、短休 5 分钟、每 4 个番茄长休 15 分钟
+  focusMin       Int     @default(25)
+  shortBreakMin  Int     @default(5)
+  longBreakMin   Int     @default(15)
+  longBreakEvery Int     @default(4)
+  // 一段结束是否自动进入下一段（专注↔休息）
+  autoStartNext  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

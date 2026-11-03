@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<!--
+  计时偏好页。
+
+  这是个很朴素的表单：字段名（focusMin / shortBreakMin / …）与后端
+  PUT /api/settings 的请求体字段一一对应，settings.js 直接把 FormData
+  映射过去，中间没有别的转换层。
+
+  页面上写死的 value 都只是占位（见下面的说明），真实值由 initSettings()
+  从服务端读回来覆盖。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>设置 — FocusFlow</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <header data-nav></header>
+
+  <main>
+    <h1 class="page-title">计时偏好</h1>
+    <!-- 这句不是客套话，是这个页面刻意的行为约定：改设置只影响「下一段」，
+         不打断正在跑的计时。timer.js 收到新设置后只在段与段的交界处生效。 -->
+    <p class="page-subtitle">修改后会从「下一段」开始生效，不会打断正在进行的计时</p>
+
+    <section class="card">
+      <form class="settings-form" id="settings-form">
+        <!-- 每个字段都用 type=number + min/max，这是第一道防线：
+             浏览器会拦住明显越界的输入（也给移动端调出数字键盘）。
+             服务端的 validate.ts 是第二道，也是最终裁决者。
+             注意 input 的 value 属性在这里留空 —— settings.js 会填。 -->
+        <div class="field">
+          <label for="focusMin">专注时长（分钟）</label>
+          <input type="number" id="focusMin" name="focusMin" min="1" max="180" required />
+          <span class="hint">一个番茄的标准长度，常用 25 分钟</span>
+        </div>
+
+        <div class="field">
+          <label for="shortBreakMin">短休息（分钟）</label>
+          <input type="number" id="shortBreakMin" name="shortBreakMin" min="1" max="60" required />
+          <span class="hint">每完成一个专注段后的休息</span>
+        </div>
+
+        <div class="field">
+          <label for="longBreakMin">长休息（分钟）</label>
+          <input type="number" id="longBreakMin" name="longBreakMin" min="1" max="60" required />
+          <span class="hint">完成若干个番茄后的较长休息</span>
+        </div>
+
+        <div class="field">
+          <label for="longBreakEvery">每几个番茄进入长休息</label>
+          <input type="number" id="longBreakEvery" name="longBreakEvery" min="1" max="12" required />
+          <span class="hint">默认 4，即第 4、8、12 个番茄后进入长休息</span>
+        </div>
+
+        <div class="field">
+          <!-- 这里的 label 没有 for：它标的是整个「复选框 + 说明」组合，
+               不是单个 input。可点区域由下面那个带 for 的 label 提供。 -->
+          <label>自动开始下一段</label>
+          <div class="field-row">
+            <input type="checkbox" id="autoStartNext" name="autoStartNext" />
+            <!-- 内联 font-weight 覆盖 .hint 的默认字重：这行是可选中的说明文字，
+                 用 .hint 的灰色小字会让人以为不可点。 -->
+            <label for="autoStartNext" class="hint" style="font-weight: 400">
+              一段结束后立即开始下一段，不用手动点
+            </label>
+          </div>
+        </div>
+
+        <!-- reset 按钮会还原成各 input 的 value 属性值 —— 而 settings.js
+             在加载后把 value 属性也一起更新成了服务端的值，
+             所以「恢复当前值」恢复的是已保存的值，不是 HTML 里写死的值。 -->
+        <div class="timer-actions" style="justify-content: flex-start">
+          <button class="primary" type="submit">保存</button>
+          <button type="reset">恢复当前值</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script type="module">
+    import '/js/nav.js';
+    import { initSettings } from '/js/settings.js';
+    import { reportError } from '/js/ui.js';
+
+    initSettings().catch(reportError);
+  </script>
+</body>
+</html>

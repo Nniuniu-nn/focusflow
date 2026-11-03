@@ -1,0 +1,45 @@
+{
+  // 只管 src/：编译产物要能直接 `node dist/server.js` 跑起来。
+  // 前端 public/ 和测试 tests/ 都不在这里编 —— 前者是浏览器直接跑的原生
+  // ES Module（不需要也不能被 tsc 转译），后者由 Vitest 自己用 esbuild 处理。
+  // 它们通过 `npm run typecheck` 之外的路径保证正确性：
+  // public/js 靠 `node --check` 的语法检查，tests 靠 Vitest 运行时真跑一遍。
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    // module 与 moduleResolution 必须成对写成 NodeNext，否则 ESM 的
+    // package.json "exports" 解析规则不会生效，依赖会找不到入口。
+    "moduleResolution": "NodeNext",
+
+    // 源码根是 src/，产物落在 dist/。这样 dist/ 里的相对结构和 src/ 一致，
+    // package.json 的 "start": "node dist/server.js" 才能命中。
+    "rootDir": "src",
+    "outDir": "dist",
+
+    "strict": true,
+    // 打开它之后 arr[0] 的类型是 T | undefined 而不是 T。这个项目里到处
+    // 在操作从数据库拿回来的数组，逼着写 `arr[0]!` 或显式判空反而是好事 ——
+    // 「以为数组一定有元素」是这类代码最常见的崩溃来源。
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Express 是 CJS 包，必须默认导入（`import express from 'express'`）。
+    // 没有 esModuleInterop 的话这条会直接编译不过。
+    "esModuleInterop": true,
+    // 大小写敏感：Windows 上文件系统不区分大小写，改 import 路径时容易写出
+    // `./Lib/foo.js` 这种本地能跑、Linux 上挂掉的代码。打开这个能当场发现。
+    "forceConsistentCasingInFileNames": true,
+    // 跳过 node_modules 里 .d.ts 的检查：能显著加快编译，
+    // 代价是依赖自身的类型错误不会被报出来（本来也不该由我们修）。
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    // 出 sourceMap 是为了线上报错栈能映射回 .ts 行号。
+    "sourceMap": true,
+    // 不出 .d.ts：这是个应用不是库，没有别的项目会 import 它。
+    "declaration": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests", "public"]
+}
