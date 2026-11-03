@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { moveAfter, moveBefore, moveBy } from './task-order.js';
 import { MODE_LABEL } from './timer-core.js';
 import { escapeHtml, formatDuration, formatTime, todayKey } from './util.js';
 import * as timer from './timer.js';
@@ -138,6 +139,8 @@ function taskTemplate(task) {
 
   return `
     <li class="task-item" data-id="${task.id}" data-status="${done ? 'done' : task.status}">
+      <span class="task-drag" draggable="true" role="button" tabindex="0"
+            aria-label="拖动排序，也可按 Alt+方向上/下键调整" title="拖动排序（Alt+↑/↓）">⠿</span>
       <input class="task-check" type="checkbox" ${done ? 'checked' : ''}
              aria-label="标记完成" data-action="toggle" />
       <div class="task-body">
@@ -222,6 +225,152 @@ document.addEventListener('change', async (event) => {
     reportError(error);
     target.checked = !target.checked;
   }
+});
+
+// ── 拖拽排序 ────────────────────────────────────────────
+
+/**
+ * 拖拽状态。dragId 非空表示正在拖；dropTarget 是当前落点。
+ * 四个独立的拖拽事件（start / over / drop / end）必须共享同一份进行中的状态，
+ * 所以放在模块级而不是某个事件回调的闭包里。
+ */
+let dragId = null;
+let dropTarget = null;
+let reordering = false;
+
+function clearDropIndicators() {
+  for (const item of document.querySelectorAll('.task-item[data-drop]')) {
+    delete item.dataset.drop;
+  }
+}
+
+function endDrag() {
+  dragId = null;
+  dropTarget = null;
+  clearDropIndicators();
+  for (const item of document.querySelectorAll('.task-item.dragging')) {
+    item.classList.remove('dragging');
+  }
+}
+
+function taskItem(id) {
+  return document.querySelector(`.task-item[data-id="${CSS.escape(id)}"]`);
+}
+
+function focusTaskHandle(id) {
+  taskItem(id)?.querySelector('.task-drag')?.focus();
+}
+
+/**
+ * 把新顺序提交给服务端。
+ *
+ * 先乐观改内存和 DOM，让卡片立刻落到用户松手的位置；请求成功后用服务端返回的
+ * 权威列表覆盖，失败则回滚到 previous 并报错。这样拖拽手感是即时的，同时不会
+ * 出现「界面已换位、后端没记住」的静默不一致。
+ *
+ * reordering 是并发闸门：请求还没回来时再次拖拽/按键会直接忽略，避免两个重排
+ * 请求互相覆盖 order。
+ */
+async function persistOrder(nextIds, focusId) {
+  if (reordering) return;
+  reordering = true;
+
+  const previous = tasks;
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  tasks = nextIds.map((id) => byId.get(id)).filter(Boolean);
+  renderTasks();
+
+  try {
+    tasks = await api.reorderTasks(date, nextIds);
+    renderTasks();
+  } catch (error) {
+    tasks = previous;
+    renderTasks();
+    reportError(error);
+  } finally {
+    reordering = false;
+    if (focusId) focusTaskHandle(focusId);
+  }
+}
+
+document.addEventListener('dragstart', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const handle = target.closest('.task-drag');
+  const item = handle?.closest('.task-item');
+  const id = item?.dataset.id;
+  if (!handle || !item || !id) return;
+
+  dragId = id;
+  dropTarget = null;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', id);
+  // 拖影用整张卡片，而不是小小的手柄
+  event.dataTransfer.setDragImage(item, 16, 16);
+  // 等拖影捕获后再降透明度，否则拖影本身也会变淡
+  requestAnimationFrame(() => item.classList.add('dragging'));
+});
+
+document.addEventListener('dragover', (event) => {
+  if (!dragId) return;
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const item = target.closest('.task-item');
+  clearDropIndicators();
+
+  // 拖到自己身上或列表外：不显示落点，也不允许 drop
+  if (!item || item.dataset.id === dragId) {
+    dropTarget = null;
+    return;
+  }
+
+  event.preventDefault();
+  const rect = item.getBoundingClientRect();
+  const placeAfter = event.clientY > rect.top + rect.height / 2;
+  item.dataset.drop = placeAfter ? 'after' : 'before';
+  dropTarget = { id: item.dataset.id, placeAfter };
+});
+
+document.addEventListener('drop', async (event) => {
+  if (!dragId || !dropTarget) return;
+  event.preventDefault();
+
+  const activeId = dragId;
+  const { id: targetId, placeAfter } = dropTarget;
+  endDrag();
+
+  const currentIds = tasks.map((task) => task.id);
+  const nextIds = placeAfter
+    ? moveAfter(currentIds, activeId, targetId)
+    : moveBefore(currentIds, activeId, targetId);
+
+  if (nextIds.every((id, index) => id === currentIds[index])) return;
+  await persistOrder(nextIds, activeId);
+});
+
+document.addEventListener('dragend', endDrag);
+
+/**
+ * 键盘排序：手柄聚焦时 Alt+↑/↓ 上移/下移一位。
+ *
+ * 拖拽是鼠标专属交互，键盘用户没法用；这条路径让排序同样可达。
+ * preventDefault 拦住 Alt+↓ 在部分浏览器里的滚动行为。
+ */
+document.addEventListener('keydown', async (event) => {
+  if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+  const target = event.target;
+  if (!(target instanceof HTMLElement) || !target.closest('.task-drag')) return;
+
+  event.preventDefault();
+  const id = target.closest('.task-item')?.dataset.id;
+  if (!id) return;
+
+  const currentIds = tasks.map((task) => task.id);
+  const nextIds = moveBy(currentIds, id, event.key === 'ArrowUp' ? -1 : 1);
+  if (nextIds.every((value, index) => value === currentIds[index])) return;
+  await persistOrder(nextIds, id);
 });
 
 /**
